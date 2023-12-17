@@ -1,4 +1,4 @@
 .env
-.cache/41/cache.db
+.cache
 OAI_CONFIG_LIST
 .venv
