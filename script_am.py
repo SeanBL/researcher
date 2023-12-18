@@ -1,7 +1,7 @@
 import os
 import requests
+import autogen
 from autogen import AssistantAgent, UserProxyAgent, GroupChat, GroupChatManager, config_list_from_json
-from autogen.agentchat.contrib.gpt_assistant_agent import GPTAssistantAgent
 import json
 from dotenv import load_dotenv
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -9,6 +9,18 @@ from langchain.prompts import PromptTemplate
 from langchain.chains.summarize import load_summarize_chain
 from bs4 import BeautifulSoup
 from langchain.chat_models import ChatOpenAI
+
+import memgpt.autogen.memgpt_agent as memgpt_autogen
+import memgpt.autogen.interface as autogen_interface 
+import memgpt.agent as agent
+import memgpt.system as system
+import memgpt.utils as utils
+import memgpt.presets as presets
+import memgpt.constants as constants
+import memgpt.personas as persona
+import memgpt.humans as human
+from memgpt.persistence_manager import InMemoryStateManager, InMemoryStateManagerWithPreloadedArchivalMemory, InMemoryStateManagerWithFaiss
+import openai
 
 load_dotenv()
 serper_api_key = os.getenv("SERPER_API_KEY")
@@ -96,61 +108,37 @@ def web_scraping(objective: str, url: str):
         print(f"HTTP request failed with status code {response.status_code}")        
 
 
-#use this config_list for gpt 3.5
-config_list_gpt35 = config_list_from_json(
-    env_or_file="OAI_CONFIG_LIST",
-    filter_dict={
-        "model": {"gpt-3.5-turbo-1106"},
-    },
-)
-
-#use this config_list for gpt 4
-# config_list_gpt4 = config_list_from_dotenv(
-#     dotenv_file_path='.env',
-#     filter_dict={
-#         "model": {"gpt-4"},
-#     },
-# )
-
-
-#assistant = AssistantAgent("assistant", llm_config={"config_list": config_list})
-#user_proxy = UserProxyAgent("user_proxy", code_execution_config={"work_dir": "coding"})
-#user_proxy.initiate_chat(assistant, message="Plot a chart of NVDA and TESLA stock price change YTD.")
-# This initiates an automated chat between the two agents to solve the task
-#construct agents
-
-assistant_one = AssistantAgent(
-    name="3.5-assistant",
-    llm_config={
-       "cache_seed": 42,  # change the cache_seed for different trials
-        "temperature": 0,
-        "config_list": config_list_gpt35,
-        "timeout": 120, 
-    },
-)
-
 user_proxy = UserProxyAgent(
    name="User_Proxy",
    system_message="A user proxy. Interact with the planner to discuss the plan. Plan execution needs to be approved by this admin.",
-   code_execution_config=False,
+   code_execution_config={"last_n_messages": 2, "work_dir": "groupchat"},
+#    code_execution_config=False,
 #    human_input_mode="Always",
 #    max_consecutive_auto_reply=1,
 #    is_termination_msg=lambda msg: "TERMINATE" in msg["content"]
 ) 
 
-#Could also try GPTAssistantAgent as well if we use the OpenAI interface
+# This is how memgpt talks to autogen
+interface = autogen_interface.AutoGenInterface()
+persistence_manager = InMemoryStateManager()
+persona = '''I am a world class reseacher who can do detailed research on any topic and produce fact based results. I do not make things up. I will try as hard as possible to gather facts and data to back up the research. 
+    I will make sure I complete the objective above with the following rules:
+    1. I should do enough research to gather as much information as possible about the objective.
+    2. If there is a URL of relevant links and articles, I will scrape it to gather more information.
+    3. After scraping and searching, I should think to myself, "are there any new things I should search and scrape based on the data I collected to increase research quality?" If the answer is yes, I will continue, but I won't do this more than 3 iterations. 
+    4. I will not make things up. I will only write facts and data I have gathered. 
+    5. In the final output, I will include all reference data and links to back up my research. I should include all reference data and links to back up my research.
+    6. I will not use G2 or Linkedin. They are mostly out dated data. 
+'''
+human = "I\'m a team manager at a FAANG tech company."
+memgpt_agent = presets.use_preset(presets.DEFAULT, 'gpt-3.5-turbo-1106', persona, human, interface, persistence_manager)
+
+
+#MemGPT researcher
+#use create_memgpt_autogen_agent_from_config()
 researcher = AssistantAgent(
     name="Researcher",
-    llm_config = {"config_list": config_list},   
-    system_message='''You are a world class reseacher who can do detailed research on any topic and produce fact based results. You do not make things up. You will try as hard as possible to gather facts and data to back up the research. 
-    Please make sure you complete the objective above with the following rules:
-    1. You should do enough research to gather as much information as possible about the objective.
-    2. If there is a URL of relevant links and articles, you will scrape it to gather more information.
-    3. After scraping and searching, you should think to yourself, "is there any new things I should search and scrape based on the data I collected to increase research quality?" If the answer is yes, continue, but don't do this more than 3 iterations. 
-    4. You should not make things up. You should only write facts and data you have gathered. 
-    5. In the final output, you should include all reference data and links to back up your research. You should include all reference data and links to back up your research.
-    6. Do not use G2 or Linkedin. They are mostly out dated data. 
-''',
+    agent=memgpt_agent,
 )
 
 researcher.register_function(
@@ -168,32 +156,8 @@ research_manager = AssistantAgent(
     
 )
 
-# Create director agent
-# director = GPTAssistantAgent(
-#     name = "director",
-#     system_message='''You are the director of a research company. You will extract a list of companies to research
-# ''',
-#     llm_config = {
-#         "config_list": config_list_gpt35,
-#         # "assistant_id": "asst_zVBJGch5mOyCYl9H1J3L9Ime",
-#     }
-# )
-
-# For future use, this will come handy!!
-# director.register_function(
-#     function_map={
-#         "get_airtable_records": get_airtable_records,
-#         "update_single_airtable_record": update_single_airtable_record
-#     }
-# )
 
 groupchat = GroupChat(agents=[user_proxy, researcher, research_manager], messages=[], max_round=10)
-
-# Another option to try
-# director = GPTAssistantAgent(
-#     name="director",
-#     llm_config=director_agent_config,
-# )
 
 # user_proxy.initiate_chat(director, message=message)
 
@@ -207,7 +171,3 @@ user_proxy.initiate_chat(
     message = """What physical therapy exercises should a patient perform for the next 8 weeks one day out from ACL surgery based on the clinical practice guidelines?"""
 )
 
-# user_proxy.initiate_chat(
-#     researcher,
-#     message = """Find articles on a physical therapy exercise plan for patients who are one day out from ACL surgery. What exercises should that patient be doing within the first two weeks and then 8 weeks."""
-# )
